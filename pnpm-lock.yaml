@@ -3270,6 +3270,24 @@ importers:
         specifier: ^11.0.0
         version: 11.0.0
 
+  services/imessage-bot:
+    dependencies:
+      '@guiiai/logg':
+        specifier: 'catalog:'
+        version: 1.2.11
+      '@photon-ai/advanced-imessage-kit':
+        specifier: ^1.14.3
+        version: 1.14.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      '@proj-airi/server-sdk':
+        specifier: workspace:^
+        version: link:../../packages/server-sdk
+      '@proj-airi/server-shared':
+        specifier: workspace:^
+        version: link:../../packages/server-shared
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+
   services/minecraft:
     dependencies:
       '@guiiai/logg':
@@ -3401,7 +3419,7 @@ importers:
         version: 1.2.1
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@electric-sql/pglite@0.3.15)(@opentelemetry/api@1.9.0)(@prisma/client@5.22.0)(@types/pg@8.16.0)(better-sqlite3@12.5.0)(kysely@0.28.9)(pg@8.19.0)(postgres@3.4.8)
+        version: 0.45.1(@electric-sql/pglite@0.3.15)(@opentelemetry/api@1.9.0)(@prisma/client@5.22.0)(@types/pg@8.16.0)(better-sqlite3@12.5.0)(kysely@0.28.11)(pg@8.19.0)(postgres@3.4.8)
       es-toolkit:
         specifier: ^1.44.0
         version: 1.44.0
@@ -7367,6 +7385,12 @@ packages:
   '@parcel/watcher@2.5.1':
     resolution: {integrity: sha512-dfUnCxiN9H4ap84DvD2ubjw+3vUNpstxa0TneY/Paat8a3R4uQZDLSvWjmznAY/DoahqTHl9V46HF/Zs3F29pg==}
     engines: {node: '>= 10.0.0'}
+
+  '@photon-ai/advanced-imessage-kit@1.14.3':
+    resolution: {integrity: sha512-i/WqwhvI9CwL9sd78YkV7PJmGftR2Z03GyIpRfMb6P6WKisHja+72wErSu66HCTLzRheDwazO44tJUbNobGoig==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      typescript: ^5.9.3
 
   '@pinia/testing@1.0.3':
     resolution: {integrity: sha512-g+qR49GNdI1Z8rZxKrQC3GN+LfnGTNf5Kk8Nz5Cz6mIGva5WRS+ffPXQfzhA0nu6TveWzPNYTjGl4nJqd3Cu9Q==}
@@ -14872,6 +14896,9 @@ packages:
     resolution: {integrity: sha512-J8rn6v4DBb2nnFqkqwy6/NnTYMcgLA+sLr0iIO41qpv0n+ngb7ksag2tMRl0inb1bbO/esUwzW1vbJi7K0sI0g==}
     engines: {node: ^12.0.0 || ^14.0.0 || >=16.0.0}
 
+  reflect-metadata@0.2.2:
+    resolution: {integrity: sha512-urBwgfrvVP/eAyXx4hluJivBKzuEbSQs9rKWCrCkbSxNv8mxPcUZKeuoF3Uy4mJl3Lwprp6yy5/39VWigZ4K6Q==}
+
   regenerate-unicode-properties@10.2.2:
     resolution: {integrity: sha512-m03P+zhBeQd1RGnYxrGyDAPpWX/epKirLrp8e3qevZdVkKtnCrjjWczIbYc8+xd6vcTStVlqfycTx1KR4LOr0g==}
     engines: {node: '>=4'}
@@ -21513,6 +21540,21 @@ snapshots:
       '@parcel/watcher-win32-arm64': 2.5.1
       '@parcel/watcher-win32-ia32': 2.5.1
       '@parcel/watcher-win32-x64': 2.5.1
+
+  '@photon-ai/advanced-imessage-kit@1.14.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)':
+    dependencies:
+      axios: feaxios@0.0.23
+      consola: 3.4.2
+      form-data: 4.0.5
+      reflect-metadata: 0.2.2
+      sharp: 0.34.5
+      socket.io-client: 4.8.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      typescript: 5.9.3
+      zod: 4.3.6
+    transitivePeerDependencies:
+      - bufferutil
+      - supports-color
+      - utf-8-validate
 
   '@pinia/testing@1.0.3(pinia@3.0.4(typescript@5.9.3)(vue@3.5.29(typescript@5.9.3)))':
     dependencies:
@@ -30151,6 +30193,8 @@ snapshots:
   refa@0.12.1:
     dependencies:
       '@eslint-community/regexpp': 4.12.2
+
+  reflect-metadata@0.2.2: {}
 
   regenerate-unicode-properties@10.2.2:
     dependencies:

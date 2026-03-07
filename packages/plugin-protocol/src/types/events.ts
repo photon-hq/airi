@@ -15,6 +15,15 @@ export interface Discord {
   channelId?: string
 }
 
+export interface IMessage {
+  chatGuid?: string
+  senderAddress?: string
+  senderDisplayName?: string
+  isGroupChat?: boolean
+  groupName?: string
+  service?: 'iMessage' | 'SMS'
+}
+
 export interface PluginIdentity {
   /**
    * Stable plugin identifier (shared across instances).
@@ -379,6 +388,7 @@ interface InputSource {
   'stage-web': boolean
   'stage-tamagotchi': boolean
   'discord': Discord
+  'imessage': IMessage
 }
 
 interface OutputSource {
@@ -445,7 +455,7 @@ export interface WebSocketEventInputTextBase {
   contextUpdates?: InputContextUpdate[]
 }
 
-export type WebSocketEventInputText = WebSocketEventInputTextBase & Partial<WithInputSource<'stage-web' | 'stage-tamagotchi' | 'discord'>>
+export type WebSocketEventInputText = WebSocketEventInputTextBase & Partial<WithInputSource<'stage-web' | 'stage-tamagotchi' | 'discord' | 'imessage'>>
 
 export interface WebSocketEventInputTextVoiceBase {
   transcription: string
@@ -454,7 +464,7 @@ export interface WebSocketEventInputTextVoiceBase {
   contextUpdates?: InputContextUpdate[]
 }
 
-export type WebSocketEventInputTextVoice = WebSocketEventInputTextVoiceBase & Partial<WithInputSource<'stage-web' | 'stage-tamagotchi' | 'discord'>>
+export type WebSocketEventInputTextVoice = WebSocketEventInputTextVoiceBase & Partial<WithInputSource<'stage-web' | 'stage-tamagotchi' | 'discord' | 'imessage'>>
 
 export interface WebSocketEventInputVoiceBase {
   audio: ArrayBuffer
@@ -462,7 +472,7 @@ export interface WebSocketEventInputVoiceBase {
   contextUpdates?: InputContextUpdate[]
 }
 
-export type WebSocketEventInputVoice = WebSocketEventInputVoiceBase & Partial<WithInputSource<'stage-web' | 'stage-tamagotchi' | 'discord'>>
+export type WebSocketEventInputVoice = WebSocketEventInputVoiceBase & Partial<WithInputSource<'stage-web' | 'stage-tamagotchi' | 'discord' | 'imessage'>>
 
 export type InputEventData = WebSocketEventInputText | WebSocketEventInputTextVoice | WebSocketEventInputVoice
 
@@ -720,11 +730,11 @@ interface UiConfigureEvent<C = undefined> {
 
 type OutputGenAiChatToolCallEvent = {
   toolCalls: ToolMessage[]
-} & Partial<WithInputSource<'stage-web' | 'stage-tamagotchi' | 'discord'>> & Partial<WithOutputSource<'gen-ai:chat'>>
+} & Partial<WithInputSource<'stage-web' | 'stage-tamagotchi' | 'discord' | 'imessage'>> & Partial<WithOutputSource<'gen-ai:chat'>>
 
 type OutputGenAiChatMessageEvent = {
   message: AssistantMessage
-} & Partial<WithInputSource<'stage-web' | 'stage-tamagotchi' | 'discord'>> & Partial<WithOutputSource<'gen-ai:chat'>>
+} & Partial<WithInputSource<'stage-web' | 'stage-tamagotchi' | 'discord' | 'imessage'>> & Partial<WithOutputSource<'gen-ai:chat'>>
 
 interface OutputGenAiChatUsage {
   promptTokens: number
@@ -737,7 +747,7 @@ type OutputGenAiChatCompleteEvent = {
   message: AssistantMessage
   toolCalls: ToolMessage[]
   usage: OutputGenAiChatUsage
-} & Partial<WithInputSource<'stage-web' | 'stage-tamagotchi' | 'discord'>> & Partial<WithOutputSource<'gen-ai:chat'>>
+} & Partial<WithInputSource<'stage-web' | 'stage-tamagotchi' | 'discord' | 'imessage'>> & Partial<WithOutputSource<'gen-ai:chat'>>
 
 interface SparkNotifyEvent {
   id: string
