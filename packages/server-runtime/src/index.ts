@@ -12,7 +12,7 @@ import { availableLogLevelStrings, Format, LogLevelString, logLevelStringToLogLe
 import { MessageHeartbeat, MessageHeartbeatKind, WebSocketEventSource } from '@proj-airi/server-shared/types'
 import { defineWebSocketHandler, H3 } from 'h3'
 import { nanoid } from 'nanoid'
-import { stringify } from 'superjson'
+import { parse, stringify } from 'superjson'
 
 import packageJSON from '../package.json'
 
@@ -198,9 +198,10 @@ export function setupApp(options?: {
     message: (peer, message) => {
       const authenticatedPeer = peers.get(peer.id)
       let event: WebSocketEvent
+      const rawText = message.text()
 
       try {
-        event = message.json() as WebSocketEvent
+        event = parse<WebSocketEvent>(rawText)
       }
       catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err)
@@ -350,7 +351,10 @@ export function setupApp(options?: {
         return
       }
 
-      const payload = stringify(event)
+      // NOTICE: Use the raw superjson text from the client instead of re-serializing.
+      // The event was parsed with superjson.parse() for routing decisions, but forwarding
+      // the original text avoids double-wrapping the superjson envelope.
+      const payload = rawText
       const allowBypass = options?.routing?.allowBypass !== false
       const shouldBypass = Boolean(event.route?.bypass && allowBypass && isDevtoolsPeer(p))
       const destinations = shouldBypass ? undefined : collectDestinations(event)
