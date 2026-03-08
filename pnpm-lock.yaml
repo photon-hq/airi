@@ -3284,9 +3284,24 @@ importers:
       '@proj-airi/server-shared':
         specifier: workspace:^
         version: link:../../packages/server-shared
+      '@xsai-ext/providers':
+        specifier: 'catalog:'
+        version: 0.4.3
+      '@xsai/generate-speech':
+        specifier: 'catalog:'
+        version: 0.4.0-beta.13
+      '@xsai/generate-transcription':
+        specifier: 'catalog:'
+        version: 0.4.3
+      kokoro-js:
+        specifier: ^1.2.1
+        version: 1.2.1
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
+      unspeech:
+        specifier: catalog:xsai
+        version: 0.1.11
 
   services/minecraft:
     dependencies:

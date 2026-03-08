@@ -26,6 +26,8 @@
     "@xsai-ext/providers": "catalog:",
     "@xsai/generate-speech": "catalog:",
     "@xsai/generate-transcription": "catalog:",
-    "tsx": "^4.21.0"
+    "kokoro-js": "^1.2.1",
+    "tsx": "^4.21.0",
+    "unspeech": "catalog:xsai"
   }
 }

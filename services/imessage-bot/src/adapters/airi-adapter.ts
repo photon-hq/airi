@@ -3,9 +3,10 @@ import type { IMessage } from '@proj-airi/server-shared/types'
 
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
-import { unlink, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { env } from 'node:process'
 import { promisify } from 'node:util'
 
@@ -16,10 +17,14 @@ import { ContextUpdateStrategy } from '@proj-airi/server-shared/types'
 import { createOpenAI } from '@xsai-ext/providers/create'
 import { generateSpeech } from '@xsai/generate-speech'
 import { generateTranscription } from '@xsai/generate-transcription'
+import { KokoroTTS } from 'kokoro-js'
+import { createUnElevenLabs } from 'unspeech'
 
 const execFileAsync = promisify(execFile)
 
 const log = useLogg('IMessageAdapter')
+
+export type TtsProvider = 'openai' | 'kokoro' | 'elevenlabs'
 
 export interface IMessageAdapterAudioConfig {
   /** Enable receiving and transcribing incoming audio messages (STT) */
@@ -32,14 +37,61 @@ export interface IMessageAdapterAudioConfig {
   sttModel?: string
   /** Enable sending AI responses as audio messages (TTS) */
   ttsEnabled?: boolean
-  /** OpenAI-compatible TTS API key */
+  /**
+   * TTS provider to use. 'openai' for OpenAI-compatible APIs,
+   * 'kokoro' for local Kokoro TTS (default).
+   */
+  ttsProvider?: TtsProvider
+  /** TTS API key (only needed for 'openai' provider) */
   ttsApiKey?: string
-  /** OpenAI-compatible TTS API base URL */
+  /** TTS API base URL (only needed for 'openai' provider) */
   ttsApiBaseUrl?: string
-  /** TTS model name (e.g. 'tts-1', 'tts-1-hd', 'gpt-4o-mini-tts') */
+  /** TTS model name. OpenAI: 'gpt-4o-mini-tts'. Kokoro: ignored (uses ONNX model). */
   ttsModel?: string
-  /** TTS voice name (e.g. 'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer') */
+  /** TTS voice. OpenAI: 'coral', 'shimmer', etc. Kokoro: 'af_heart', 'af_bella', etc. */
   ttsVoice?: string
+  /**
+   * Speech speed multiplier (0.25 to 4.0, default 1.0).
+   * Values above 1.0 sound more energetic; 1.1-1.2 works well for anime characters.
+   * Only supported by OpenAI provider.
+   */
+  ttsSpeed?: number
+  /**
+   * Voice instructions for gpt-4o-mini-tts model. Describes how the voice
+   * should sound (e.g. 'Speak in a cute, high-pitched anime girl voice').
+   * Only supported by gpt-4o-mini-tts; ignored by other models/providers.
+   */
+  ttsInstructions?: string
+  /**
+   * Kokoro ONNX model quantization. Options: 'fp32', 'fp16', 'q8', 'q4', 'q4f16'.
+   * Lower precision = faster & less memory but slightly lower quality.
+   * Default: 'q8' (good balance of quality and speed for server use).
+   */
+  ttsKokoroQuantization?: string
+  /**
+   * ElevenLabs voice stability (0.0 to 1.0, default 0.5).
+   * Higher values produce more consistent but potentially monotone output.
+   * Only used when ttsProvider is 'elevenlabs'.
+   */
+  ttsElevenLabsStability?: number
+  /**
+   * ElevenLabs voice similarity boost (0.0 to 1.0, default 0.75).
+   * Higher values make the voice more closely match the original.
+   * Only used when ttsProvider is 'elevenlabs'.
+   */
+  ttsElevenLabsSimilarityBoost?: number
+  /**
+   * ElevenLabs style exaggeration (0.0 to 1.0, default 0).
+   * Higher values amplify the voice's style. Increases latency.
+   * Only used when ttsProvider is 'elevenlabs'.
+   */
+  ttsElevenLabsStyle?: number
+  /**
+   * ElevenLabs speaker boost toggle (default true).
+   * Enhances speaker clarity at the cost of higher latency.
+   * Only used when ttsProvider is 'elevenlabs'.
+   */
+  ttsElevenLabsSpeakerBoost?: boolean
   /**
    * Whether to also send the text message alongside the audio message.
    * When true, both text and audio are sent. When false, only audio is sent.
@@ -91,6 +143,8 @@ export class IMessageAdapter {
   private isReconnecting = false
   private isConnected = false
   private audioConfig: Required<IMessageAdapterAudioConfig>
+  /** Lazily loaded Kokoro TTS model instance, cached across calls */
+  private kokoroModel: KokoroTTS | null = null
 
   constructor(config: IMessageAdapterConfig) {
     this.imessageServerUrl = config.imessageServerUrl || env.IMESSAGE_SERVER_URL || 'http://localhost:1234'
@@ -103,10 +157,18 @@ export class IMessageAdapter {
       sttApiBaseUrl: config.audio?.sttApiBaseUrl ?? env.IMESSAGE_STT_API_BASE_URL ?? '',
       sttModel: config.audio?.sttModel ?? env.IMESSAGE_STT_MODEL ?? 'whisper-1',
       ttsEnabled: config.audio?.ttsEnabled ?? (env.IMESSAGE_TTS_ENABLED === 'true'),
+      ttsProvider: config.audio?.ttsProvider ?? (env.IMESSAGE_TTS_PROVIDER as TtsProvider | undefined) ?? 'kokoro',
       ttsApiKey: config.audio?.ttsApiKey ?? env.IMESSAGE_TTS_API_KEY ?? '',
       ttsApiBaseUrl: config.audio?.ttsApiBaseUrl ?? env.IMESSAGE_TTS_API_BASE_URL ?? '',
-      ttsModel: config.audio?.ttsModel ?? env.IMESSAGE_TTS_MODEL ?? 'tts-1',
-      ttsVoice: config.audio?.ttsVoice ?? env.IMESSAGE_TTS_VOICE ?? 'alloy',
+      ttsModel: config.audio?.ttsModel ?? env.IMESSAGE_TTS_MODEL ?? '',
+      ttsVoice: config.audio?.ttsVoice ?? env.IMESSAGE_TTS_VOICE ?? 'af_heart',
+      ttsSpeed: config.audio?.ttsSpeed ?? (env.IMESSAGE_TTS_SPEED ? Number.parseFloat(env.IMESSAGE_TTS_SPEED) : 1.0),
+      ttsInstructions: config.audio?.ttsInstructions ?? env.IMESSAGE_TTS_INSTRUCTIONS ?? '',
+      ttsKokoroQuantization: config.audio?.ttsKokoroQuantization ?? env.IMESSAGE_TTS_KOKORO_QUANTIZATION ?? 'q8',
+      ttsElevenLabsStability: config.audio?.ttsElevenLabsStability ?? (env.IMESSAGE_TTS_ELEVENLABS_STABILITY ? Number.parseFloat(env.IMESSAGE_TTS_ELEVENLABS_STABILITY) : 0.5),
+      ttsElevenLabsSimilarityBoost: config.audio?.ttsElevenLabsSimilarityBoost ?? (env.IMESSAGE_TTS_ELEVENLABS_SIMILARITY_BOOST ? Number.parseFloat(env.IMESSAGE_TTS_ELEVENLABS_SIMILARITY_BOOST) : 0.75),
+      ttsElevenLabsStyle: config.audio?.ttsElevenLabsStyle ?? (env.IMESSAGE_TTS_ELEVENLABS_STYLE ? Number.parseFloat(env.IMESSAGE_TTS_ELEVENLABS_STYLE) : 0),
+      ttsElevenLabsSpeakerBoost: config.audio?.ttsElevenLabsSpeakerBoost ?? (env.IMESSAGE_TTS_ELEVENLABS_SPEAKER_BOOST !== 'false'),
       ttsSendTextAlongside: config.audio?.ttsSendTextAlongside ?? (env.IMESSAGE_TTS_SEND_TEXT_ALONGSIDE === 'true'),
     }
 
@@ -181,72 +243,177 @@ export class IMessageAdapter {
   }
 
   /**
-   * Synthesizes text into audio using an OpenAI-compatible TTS API,
+   * Synthesizes text into audio using the configured TTS provider,
    * writes it to a temporary file, and sends it as an iMessage audio message.
    *
-   * NOTICE: The Photon SDK `attachments.sendAttachment` requires a `filePath`
-   * on the server filesystem, so we must write the audio to a temp file first.
+   * Supports OpenAI (direct) and Kokoro (local ONNX model).
+   *
+   * NOTICE: Audio is written to a temp file, converted to M4A via ffmpeg,
+   * then uploaded to the Photon server via native fetch (bypassing feaxios).
    */
   private async synthesizeAndSendAudio(text: string, chatGuid: string): Promise<void> {
-    if (!this.audioConfig.ttsApiKey || !this.audioConfig.ttsApiBaseUrl) {
-      log.warn('TTS API key or base URL not configured, falling back to text-only.')
+    // NOTICE: Kokoro runs locally and needs no API key/URL.
+    // OpenAI and ElevenLabs providers require API key and base URL.
+    if (this.audioConfig.ttsProvider !== 'kokoro' && (!this.audioConfig.ttsApiKey || !this.audioConfig.ttsApiBaseUrl)) {
+      log.warn(`${this.audioConfig.ttsProvider} TTS API key or base URL not configured, falling back to text-only.`)
       await this.imessageSdk.messages.sendMessage({ chatGuid, message: text })
       return
     }
 
     try {
-      const openai = createOpenAI(this.audioConfig.ttsApiKey, this.audioConfig.ttsApiBaseUrl)
+      let audioArrayBuffer: ArrayBuffer
+      switch (this.audioConfig.ttsProvider) {
+        case 'kokoro':
+          audioArrayBuffer = await this.generateSpeechKokoro(text)
+          break
+        case 'elevenlabs':
+          audioArrayBuffer = await this.generateSpeechElevenLabs(text)
+          break
+        case 'openai':
+        default:
+          audioArrayBuffer = await this.generateSpeechOpenAI(text)
+          break
+      }
 
-      const audioArrayBuffer = await generateSpeech({
-        ...openai.speech(this.audioConfig.ttsModel),
-        input: text,
-        voice: this.audioConfig.ttsVoice,
-        // NOTICE: OpenAI TTS 'aac' format returns raw AAC (ADTS), not an M4A
-        // container. We request AAC here, then remux into M4A via ffmpeg below.
-        responseFormat: 'aac',
-      })
+      log.log(`TTS generated ${audioArrayBuffer.byteLength} bytes of audio (provider: ${this.audioConfig.ttsProvider})`)
 
       // NOTICE: iMessage audio messages require AAC in an M4A (MPEG-4) container.
-      // OpenAI's 'aac' responseFormat returns raw ADTS frames, so we use ffmpeg
-      // to remux (copy, no re-encoding) into a proper .m4a container.
+      // OpenAI returns raw AAC (ADTS), Kokoro returns WAV, ElevenLabs returns MP3
+      // — all need conversion/remuxing via ffmpeg.
       const timestamp = Date.now()
-      const rawAacPath = join(tmpdir(), `airi-tts-${timestamp}.aac`)
+      const rawExtMap: Record<TtsProvider, string> = { kokoro: 'wav', openai: 'aac', elevenlabs: 'mp3' }
+      const rawExt = rawExtMap[this.audioConfig.ttsProvider] ?? 'aac'
+      const rawPath = join(tmpdir(), `airi-tts-${timestamp}.${rawExt}`)
       const tempFilePath = join(tmpdir(), `airi-tts-${timestamp}.m4a`)
-      await writeFile(rawAacPath, Buffer.from(audioArrayBuffer))
+      await writeFile(rawPath, Buffer.from(audioArrayBuffer))
 
       try {
-        await execFileAsync('ffmpeg', [
+        // NOTICE: AAC ADTS can be stream-copied into M4A container directly.
+        // WAV (Kokoro) and MP3 (ElevenLabs) need re-encoding to AAC.
+        const ffmpegResult = await execFileAsync('ffmpeg', [
           '-i',
-          rawAacPath,
-          '-c:a',
-          'copy', // Stream copy — no re-encoding, just remux
+          rawPath,
+          ...(rawExt === 'aac'
+            ? ['-c:a', 'copy'] // Stream copy for AAC — no re-encoding
+            : ['-c:a', 'aac', '-b:a', '128k']), // Encode WAV/MP3 -> AAC
           '-movflags',
           '+faststart',
           '-y', // Overwrite output if it exists
           tempFilePath,
         ])
+        if (ffmpegResult.stderr) {
+          log.log(`ffmpeg stderr: ${ffmpegResult.stderr.slice(-500)}`)
+        }
       }
       finally {
-        // Clean up the intermediate raw AAC file
-        await unlink(rawAacPath).catch(() => {})
+        await unlink(rawPath).catch(() => {})
       }
 
-      await this.imessageSdk.attachments.sendAttachment({
-        chatGuid,
-        filePath: tempFilePath,
-        isAudioMessage: true,
-      })
+      // NOTICE: The SDK's sendAttachment uses feaxios (axios override), which has
+      // known bugs with arraybuffer responses. However, for POST requests with
+      // FormData it appears to work. If this fails with 500, the Photon server
+      // may be rejecting the audio format. We bypass the SDK and POST directly
+      // as a workaround, similar to downloadAttachmentDirect.
+      await this.sendAttachmentDirect(chatGuid, tempFilePath)
 
-      // Clean up the remuxed M4A temp file after sending
       await unlink(tempFilePath).catch(() => {})
 
-      log.log(`Sent audio message to ${chatGuid} (${audioArrayBuffer.byteLength} bytes)`)
+      log.log(`Sent audio message to ${chatGuid} (${audioArrayBuffer.byteLength} bytes raw, provider: ${this.audioConfig.ttsProvider})`)
     }
     catch (error) {
       log.withError(error as Error).error('Failed to synthesize/send audio, falling back to text.')
       // Fallback: send as text if TTS fails
       await this.imessageSdk.messages.sendMessage({ chatGuid, message: text })
     }
+  }
+
+  /** Generates speech audio using the OpenAI-compatible TTS API. */
+  private async generateSpeechOpenAI(text: string): Promise<ArrayBuffer> {
+    const openai = createOpenAI(this.audioConfig.ttsApiKey, this.audioConfig.ttsApiBaseUrl)
+
+    return generateSpeech({
+      ...openai.speech(this.audioConfig.ttsModel),
+      input: text,
+      voice: this.audioConfig.ttsVoice,
+      speed: this.audioConfig.ttsSpeed,
+      // NOTICE: 'instructions' is a gpt-4o-mini-tts-specific field that controls
+      // voice style. Passed through via WithUnknown<GenerateSpeechOptions>.
+      ...(this.audioConfig.ttsInstructions ? { instructions: this.audioConfig.ttsInstructions } : {}),
+      // NOTICE: OpenAI TTS 'aac' format returns raw AAC (ADTS), not an M4A container.
+      responseFormat: 'aac' as const,
+    })
+  }
+
+  /**
+   * Generates speech audio using the ElevenLabs API via the unspeech proxy.
+   * Returns MP3 audio as an ArrayBuffer.
+   *
+   * NOTICE: The unspeech library routes requests through an unspeech proxy server
+   * (configured via ttsApiBaseUrl). The proxy translates the OpenAI-compatible
+   * /audio/speech endpoint into ElevenLabs-native API calls. Model names are
+   * prefixed with 'elevenlabs/' internally by the library.
+   */
+  private async generateSpeechElevenLabs(text: string): Promise<ArrayBuffer> {
+    const provider = createUnElevenLabs(
+      this.audioConfig.ttsApiKey,
+      this.audioConfig.ttsApiBaseUrl || 'https://unspeech.hyp3r.link/v1/',
+    )
+
+    const model = this.audioConfig.ttsModel || 'eleven_multilingual_v2'
+    const voice = this.audioConfig.ttsVoice || 'EXAVITQu4vr4xnSDxMaL'
+
+    log.log(`Generating ElevenLabs speech (model: ${model}, voice: ${voice}, text: "${text.slice(0, 50)}...")`)
+
+    return generateSpeech({
+      ...provider.speech(model, {
+        voiceSettings: {
+          stability: this.audioConfig.ttsElevenLabsStability,
+          similarityBoost: this.audioConfig.ttsElevenLabsSimilarityBoost,
+          style: this.audioConfig.ttsElevenLabsStyle,
+          useSpeakerBoost: this.audioConfig.ttsElevenLabsSpeakerBoost,
+          speed: this.audioConfig.ttsSpeed,
+        },
+      }),
+      input: text,
+      voice,
+      responseFormat: 'mp3',
+    })
+  }
+
+  /**
+   * Generates speech audio locally using Kokoro TTS (ONNX model via kokoro-js).
+   * The model is lazily loaded on first call and cached for subsequent calls.
+   * Returns WAV audio as an ArrayBuffer.
+   */
+  private async generateSpeechKokoro(text: string): Promise<ArrayBuffer> {
+    if (!this.kokoroModel) {
+      const quantization = this.audioConfig.ttsKokoroQuantization as 'fp32' | 'fp16' | 'q8' | 'q4' | 'q4f16'
+      log.log(`Loading Kokoro TTS model (quantization: ${quantization})...`)
+      this.kokoroModel = await KokoroTTS.from_pretrained(
+        'onnx-community/Kokoro-82M-v1.0-ONNX',
+        {
+          dtype: quantization,
+          // NOTICE: In Node.js, 'cpu' uses onnxruntime-node for native performance.
+          // 'wasm' also works but is slower. WebGPU is not available in Node.js.
+          device: 'cpu',
+        },
+      )
+      log.log(`Kokoro TTS model loaded. Available voices: ${Object.keys(this.kokoroModel.voices).join(', ')}`)
+    }
+
+    const voice = this.audioConfig.ttsVoice || 'af_heart'
+    const speed = this.audioConfig.ttsSpeed || 1.0
+
+    log.log(`Generating Kokoro speech (voice: ${voice}, speed: ${speed}, text: "${text.slice(0, 50)}...")`)
+    const result = await this.kokoroModel.generate(text, {
+      voice: voice as any,
+      speed,
+    })
+
+    // NOTICE: kokoro-js result.toBlob() uses the browser Blob API which may not
+    // behave identically in Node.js. Use toWav() which returns an ArrayBuffer
+    // containing a complete WAV file (PCM audio with headers).
+    return result.toWav()
   }
 
   /**
@@ -271,6 +438,50 @@ export class IMessageAdapter {
     }
 
     return Buffer.from(await res.arrayBuffer())
+  }
+
+  /**
+   * Sends an attachment directly via native fetch, bypassing the SDK's
+   * sendAttachment method which uses feaxios for HTTP and may have issues.
+   *
+   * NOTICE: The SDK's sendAttachment uses feaxios-overridden axios for the
+   * multipart POST. While feaxios's POST path generally works, the Photon
+   * server was returning 500 errors. This workaround uses native fetch with
+   * the standard FormData API to eliminate feaxios as a variable.
+   */
+  private async sendAttachmentDirect(chatGuid: string, filePath: string, isAudioMessage = true): Promise<void> {
+    const url = `${this.imessageServerUrl}/api/v1/message/attachment`
+    const headers: Record<string, string> = {}
+    if (this.imessageApiKey) {
+      headers['X-API-Key'] = this.imessageApiKey
+    }
+
+    const fileBuffer = await readFile(filePath)
+    const fileName = basename(filePath)
+    const tempGuid = randomUUID()
+
+    const form = new FormData()
+    form.append('chatGuid', chatGuid)
+    form.append('attachment', new Blob([fileBuffer]), fileName)
+    form.append('name', fileName)
+    form.append('tempGuid', tempGuid)
+    if (isAudioMessage) {
+      form.append('isAudioMessage', 'true')
+      form.append('method', 'private-api')
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: form,
+    })
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '<no body>')
+      throw new Error(`Attachment upload failed: ${res.status} ${res.statusText} — ${body}`)
+    }
+
+    log.log(`Attachment uploaded successfully: ${fileName} (${fileBuffer.byteLength} bytes)`)
   }
 
   /**
@@ -542,28 +753,9 @@ export class IMessageAdapter {
 
       const imessageNotice = `The input is a voice message from iMessage ${contextPrefix} (chat: ${chatGuid ?? 'unknown'}). Transcription: "${transcription}"`
 
-      // Send as input:text:voice (primary event for voice-aware modules)
-      this.airiClient.send({
-        type: 'input:text:voice',
-        data: {
-          transcription,
-          overrides: {
-            messagePrefix: `(Voice message from iMessage user ${senderAddress} ${contextPrefix}): `,
-            sessionId,
-          },
-          contextUpdates: [{
-            strategy: ContextUpdateStrategy.AppendSelf,
-            text: imessageNotice,
-            content: imessageNotice,
-            metadata: {
-              imessage: imessageContext,
-            },
-          }],
-          imessage: imessageContext,
-        },
-      })
-
-      // Also send as input:text for modules that only handle text events
+      // NOTICE: Only send input:text (not both input:text:voice and input:text)
+      // to avoid generating duplicate responses. Each connected stage-web module
+      // responds to every input event, so sending two events doubles the output.
       this.airiClient.send({
         type: 'input:text',
         data: {
@@ -596,7 +788,7 @@ export class IMessageAdapter {
       log.log(`STT enabled (model: ${this.audioConfig.sttModel}, base URL: ${this.audioConfig.sttApiBaseUrl})`)
     }
     if (this.audioConfig.ttsEnabled) {
-      log.log(`TTS enabled (model: ${this.audioConfig.ttsModel}, voice: ${this.audioConfig.ttsVoice}, base URL: ${this.audioConfig.ttsApiBaseUrl})`)
+      log.log(`TTS enabled (provider: ${this.audioConfig.ttsProvider}, model: ${this.audioConfig.ttsModel}, voice: ${this.audioConfig.ttsVoice}, speed: ${this.audioConfig.ttsSpeed}, base URL: ${this.audioConfig.ttsApiBaseUrl}${this.audioConfig.ttsInstructions ? `, instructions: "${this.audioConfig.ttsInstructions.slice(0, 50)}..."` : ''})`)
     }
 
     try {
